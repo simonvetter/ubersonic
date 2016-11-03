@@ -49,7 +49,8 @@ func (sdb *SubsonicDB) Open() (err error) {
     var stmt    *sql.Stmt
 
     // attempt to open the database
-    db, err  = sql.Open("sqlite3", sdb.dbpath); if err != nil {
+    db, err  = sql.Open("sqlite3", fmt.Sprintf("file://%s?mode=ro", sdb.dbpath))
+    if err != nil {
         return
     }
 

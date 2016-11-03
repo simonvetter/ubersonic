@@ -321,6 +321,9 @@ void scan_fs(sqlite3 * sqldb, string name) {
 
 
 int main(int argc, char* argv[]) {
+    sqlite3*    sqldb;
+    int         ok;
+
     if (argc < 3) {
         fprintf(stderr,
             "Usage: %s action [args...]\n"
@@ -334,14 +337,19 @@ int main(int argc, char* argv[]) {
     string dbpath = argv[2];
 
     // Create a new sqlite db if file does not exist
-    sqlite3 * sqldb;
-    int ok = sqlite3_open_v2(
+    ok = sqlite3_open_v2(
         dbpath.c_str(),
         &sqldb,
         SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
         NULL
     );
-    panic_if(ok != SQLITE_OK, "Could not open sqlite3 database!");
+    panic_if(ok != SQLITE_OK, "Could not open sqlite3 database");
+
+    // wait up to 5 secs when the database is being read or written to
+    // by another process (allows the server and the indexer to use
+    // the db concurrently)
+    ok = sqlite3_busy_timeout(sqldb, 5000);
+    panic_if(ok != SQLITE_OK, "Could not enable database sharing");
 
     if (action == "scan") {
         string musicdir = argv[3];
