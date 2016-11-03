@@ -25,6 +25,8 @@
 #include <taglib/id3v2tag.h>
 #include <taglib/oggfile.h>
 #include <taglib/vorbisfile.h>
+#include <taglib/flacfile.h>
+#include <taglib/mp4file.h>
 #include <taglib/attachedpictureframe.h>
 #include <taglib/flacpicture.h>
 
@@ -128,6 +130,18 @@ string base64Decode(const string & input) {
     return ret;
 }
 
+string getFileExtension(const string& fileName)
+{
+    string::size_type dot   = fileName.find_last_of(".");
+    string::size_type slash = fileName.find_last_of("/");
+
+    if(dot != string::npos && ((slash != string::npos && slash < dot) || slash == string::npos)) {
+        return fileName.substr(dot + 1);
+    } else {
+        return "";
+    }
+}
+
 void insert_artist(sqlite3 * sqldb, string artist) {
     sqlite3_stmt *stmt;
     sqlite3_prepare_v2(sqldb, "INSERT OR REPLACE INTO `artists` (`id`, `name`) VALUES (?,?);", -1, &stmt, NULL);
@@ -135,22 +149,49 @@ void insert_artist(sqlite3 * sqldb, string artist) {
     sqlite3_bind_int64(stmt, 1, calcId(artist));
     sqlite3_bind_text (stmt, 2, artist.c_str(), -1, NULL);
 
-    sqlite3_step(stmt);
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        cout << "failed to insert artist: " << sqlite3_errmsg(sqldb) << endl;
+    }
     sqlite3_finalize(stmt);
 }
 
 void insert_album(sqlite3 * sqldb, string album, string artist, string cover) {
-    sqlite3_stmt *stmt;
-    sqlite3_prepare_v2(sqldb, "INSERT OR REPLACE INTO `albums` "
-        "(`id`, `title`, `artistid`, `artist`, `cover`) VALUES (?,?,?,?,?);", -1, &stmt, NULL);
+    sqlite3_stmt    *stmt;
+    uint64_t        albumId = calcId(album + "@" + artist);
 
-    sqlite3_bind_int64(stmt, 1, calcId(album + "@" + artist));
-    sqlite3_bind_text (stmt, 2, album.c_str(), -1, NULL);
-    sqlite3_bind_int64(stmt, 3, calcId(artist));
-    sqlite3_bind_text (stmt, 4, artist.c_str(), -1, NULL);
-    sqlite3_bind_blob (stmt, 5, cover.data(), cover.size(), NULL);
+    // make sure the record exists so we can update later
+    sqlite3_prepare_v2(sqldb, "INSERT OR IGNORE INTO `albums` (`id`) VALUES (?);", -1, &stmt, NULL);
+    sqlite3_bind_int64(stmt, 1, albumId);
 
-    sqlite3_step(stmt);
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        cout << "failed to insert album: " << sqlite3_errmsg(sqldb) << endl;
+    }
+    sqlite3_finalize(stmt);
+
+    // don't attempt to update the cover art if the current file doesn't have it
+    if (cover.size() != 0) {
+        sqlite3_prepare_v2(sqldb,
+                        "UPDATE `albums` SET `title`=?, `artistid`=?, `artist`=?, `cover`=?"
+                        "WHERE id=?;", -1, &stmt, NULL);
+    } else {
+        sqlite3_prepare_v2(sqldb,
+                        "UPDATE `albums` SET `title`=?, `artistid`=?, `artist`=?"
+                        "WHERE id=?;", -1, &stmt, NULL);
+    }
+
+    sqlite3_bind_text (stmt, 1, album.c_str(), -1, NULL);
+    sqlite3_bind_int64(stmt, 2, calcId(artist));
+    sqlite3_bind_text (stmt, 3, artist.c_str(), -1, NULL);
+    if (cover.size() != 0) {
+        sqlite3_bind_blob (stmt, 4, cover.data(), cover.size(), NULL);
+        sqlite3_bind_int64(stmt, 5, albumId);
+    } else {
+        sqlite3_bind_int64(stmt, 4, albumId);
+    }
+
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        cout << "failed to update album: " << sqlite3_errmsg(sqldb) << endl;
+    }
     sqlite3_finalize(stmt);
 }
 
@@ -178,15 +219,14 @@ void insert_song(sqlite3 * sqldb, string filename, string title, string artist, 
     sqlite3_bind_text (stmt,14, filename.c_str(), -1, NULL);
 
     if (sqlite3_step(stmt) != SQLITE_DONE) {
-        cout << "Err " << filename << endl;
-        cout << sqlite3_errmsg(sqldb) << endl;
+        cout << "failed to insert song: " << sqlite3_errmsg(sqldb) << " - "<< filename << endl;
     }
 
     sqlite3_finalize(stmt);
 }
 
 void scan_music_file(sqlite3 * sqldb, string fullpath) {
-    string ext = fullpath.substr(fullpath.size()-3);
+    string ext = getFileExtension(fullpath);
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
     TagLib::FileRef f(fullpath.c_str());
@@ -223,12 +263,22 @@ void scan_music_file(sqlite3 * sqldb, string fullpath) {
                 cover = string(picture.data().data(), picture.data().size());
             }
         }
+    } else if (ext == "flac") {
+        auto flac_tag   = dynamic_cast< TagLib::FLAC::File *>(tag);
+        if (flac_tag) {
+            TagLib::List<TagLib::FLAC::Picture*> picList = flac_tag->pictureList();
+            if (picList.size() > 0) {
+                cover = string(picList[0]->data().data(), picList[0]->data().size());
+            }
+        }
     }
 
-    if (ext == "mp3" or ext == "ogg") {
+    if (ext == "mp3" or ext == "ogg" or ext == "flac") {
         TagLib::AudioProperties *properties = f.audioProperties();
-        if (!properties)
+        if (!properties) {
+            cout << "ignored " << fullpath << ": no audio metadata present" << endl;
             return;
+        }
 
         int discn = 0;
         if (tag->properties().contains("DISCNUMBER")) {
@@ -242,7 +292,7 @@ void scan_music_file(sqlite3 * sqldb, string fullpath) {
         insert_album(sqldb, tag->album().toCString(true), tag->artist().toCString(true), cover);
         insert_artist(sqldb, tag->artist().toCString(true));
 
-	cout << "added " << fullpath << "\n";
+        cout << "added " << fullpath << endl;
     }
 }
 
@@ -255,7 +305,6 @@ void scan_fs(sqlite3 * sqldb, string name) {
 
     do {
         string fullpath = name + "/" + string(entry->d_name);
-        string ext = fullpath.substr(fullpath.size()-3);
 
         struct stat statbuf;
         stat(fullpath.c_str(), &statbuf);
@@ -299,7 +348,7 @@ int main(int argc, char* argv[]) {
 
         sqlite3_exec(sqldb, init_sql, NULL, NULL, NULL);
 
-	cout << "scanning " << musicdir << "\n";
+        cout << "scanning " << musicdir << endl;
         // Start scanning and adding stuff to the database
         scan_fs(sqldb, musicdir);
     }
