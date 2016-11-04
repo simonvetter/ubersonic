@@ -14,7 +14,7 @@ build-server: $(GOFILES)
 	$(GOENV) go build -o bin/ubersonic-server $(GOFILES)
 
 build-indexer: src/indexer.cpp
-	gcc src/indexer.cpp -std=c++11 -ltag -lstdc++ -lsqlite3 -g -o bin/ubersonic-indexer
+	gcc src/indexer.cpp -Wall -std=c++11 -ltag -lstdc++ -lsqlite3 -g -o bin/ubersonic-indexer
 
 install:
 	mkdir -p /opt/ubersonic/bin

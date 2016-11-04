@@ -77,6 +77,17 @@ void panic_if(bool cond, string text) {
     }
 }
 
+// trim spaces from both ends
+std::string trim(std::string s) {
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(),
+            std::not1(std::ptr_fun<int, int>(std::isspace))));
+
+    s.erase(std::find_if(s.rbegin(), s.rend(),
+            std::not1(std::ptr_fun<int, int>(std::isspace))).base(), s.end());
+
+    return s;
+}
+
 uint64_t calcId(string s) {
     // 64 bit FNV-1a
     uint64_t hash = 14695981039346656037ULL;
@@ -150,7 +161,7 @@ void insert_artist(sqlite3 * sqldb, string artist) {
     sqlite3_bind_text (stmt, 2, artist.c_str(), -1, NULL);
 
     if (sqlite3_step(stmt) != SQLITE_DONE) {
-        cout << "failed to insert artist: " << sqlite3_errmsg(sqldb) << endl;
+        cerr << "failed to insert artist: " << sqlite3_errmsg(sqldb) << endl;
     }
     sqlite3_finalize(stmt);
 }
@@ -164,7 +175,7 @@ void insert_album(sqlite3 * sqldb, string album, string artist, string cover) {
     sqlite3_bind_int64(stmt, 1, albumId);
 
     if (sqlite3_step(stmt) != SQLITE_DONE) {
-        cout << "failed to insert album: " << sqlite3_errmsg(sqldb) << endl;
+        cerr << "failed to insert album: " << sqlite3_errmsg(sqldb) << endl;
     }
     sqlite3_finalize(stmt);
 
@@ -190,7 +201,7 @@ void insert_album(sqlite3 * sqldb, string album, string artist, string cover) {
     }
 
     if (sqlite3_step(stmt) != SQLITE_DONE) {
-        cout << "failed to update album: " << sqlite3_errmsg(sqldb) << endl;
+        cerr << "failed to update album: " << sqlite3_errmsg(sqldb) << endl;
     }
     sqlite3_finalize(stmt);
 }
@@ -219,23 +230,30 @@ void insert_song(sqlite3 * sqldb, string filename, string title, string artist, 
     sqlite3_bind_text (stmt,14, filename.c_str(), -1, NULL);
 
     if (sqlite3_step(stmt) != SQLITE_DONE) {
-        cout << "failed to insert song: " << sqlite3_errmsg(sqldb) << " - "<< filename << endl;
+        cerr << "failed to insert song: " << sqlite3_errmsg(sqldb) << " ("<< filename << ")" << endl;
     }
 
     sqlite3_finalize(stmt);
 }
 
-void scan_music_file(sqlite3 * sqldb, string fullpath) {
-    string ext = getFileExtension(fullpath);
+bool scan_music_file(sqlite3 * sqldb, string fullpath) {
+    string  artist;
+    string  album;
+    string  title;
+    string  ext = getFileExtension(fullpath);
+
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    if (ext != "mp3" && ext != "ogg" && ext != "flac") {
+        return false;
+    }
 
     TagLib::FileRef f(fullpath.c_str());
     if (f.isNull())
-        return;
+        return false;
 
     TagLib::Tag *tag = f.tag();
     if (!tag)
-        return;
+        return false;
 
 
     string cover;
@@ -273,35 +291,55 @@ void scan_music_file(sqlite3 * sqldb, string fullpath) {
         }
     }
 
-    if (ext == "mp3" or ext == "ogg" or ext == "flac") {
-        TagLib::AudioProperties *properties = f.audioProperties();
-        if (!properties) {
-            cout << "ignored " << fullpath << ": no audio metadata present" << endl;
-            return;
-        }
+    artist  = trim(tag->artist().toCString(true));
+    album   = trim(tag->album().toCString(true));
+    title   = trim(tag->title().toCString(true));
 
-        int discn = 0;
-        if (tag->properties().contains("DISCNUMBER")) {
-            discn = tag->properties()["DISCNUMBER"][0].toInt();
-        }
-
-        insert_song(sqldb, fullpath, tag->title().toCString(true), tag->artist().toCString(true),
-            tag->album().toCString(true), ext, tag->genre().toCString(true),
-            tag->track(), tag->year(), discn, properties->length(), properties->bitrate());
-
-        insert_album(sqldb, tag->album().toCString(true), tag->artist().toCString(true), cover);
-        insert_artist(sqldb, tag->artist().toCString(true));
-
-        cout << "added " << fullpath << endl;
+    TagLib::AudioProperties *properties = f.audioProperties();
+    if (!properties) {
+        cout << "ignored " << fullpath << ": no audio metadata present" << endl;
+        return false;
     }
+
+    int discn = 0;
+    if (tag->properties().contains("DISCNUMBER")) {
+        discn = tag->properties()["DISCNUMBER"][0].toInt();
+    }
+
+    insert_song(sqldb,
+                    fullpath,
+                    title,
+                    artist,
+                    album,
+                    ext,
+                    trim(tag->genre().toCString(true)),
+                    tag->track(),
+                    tag->year(),
+                    discn,
+                    properties->length(),
+                    properties->bitrate());
+
+    insert_album(sqldb, album, artist, cover);
+
+    insert_artist(sqldb, artist);
+
+    cout << "added " << fullpath << endl;
+
+    return true;
 }
 
-void scan_fs(sqlite3 * sqldb, string name) {
-    DIR *dir;
-    struct dirent *entry;
+int scan_fs(sqlite3 * sqldb, string name) {
+    struct dirent   *entry;
+    DIR             *dir;
+    int             added_songs = 0;
 
-    if (!(dir = opendir(name.c_str())))  return;
-    if (!(entry = readdir(dir))) return;
+    if (!(dir = opendir(name.c_str()))) {
+         return 0;
+    }
+
+    if (!(entry = readdir(dir))) {
+         return 0;
+    }
 
     do {
         string fullpath = name + "/" + string(entry->d_name);
@@ -311,28 +349,93 @@ void scan_fs(sqlite3 * sqldb, string name) {
         if (S_ISDIR(statbuf.st_mode)) {
             if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
                 continue;
-            scan_fs(sqldb, fullpath);
+            added_songs += scan_fs(sqldb, fullpath);
         }
-        else
-            scan_music_file(sqldb, fullpath);
-    } while (entry = readdir(dir));
+        else {
+            if (scan_music_file(sqldb, fullpath)) {
+                added_songs++;
+            }
+        }
+    } while ((entry = readdir(dir)));
     closedir(dir);
+
+    return added_songs;
 }
 
+void cleanup_db(sqlite3 * sqldb) {
+    sqlite3_stmt *stmt;
+
+    // remove albums without any song
+    sqlite3_prepare_v2(sqldb,
+                        "DELETE FROM `albums` WHERE ("
+                        "SELECT count(id) FROM `songs` WHERE albumId = albums.id) = 0;",
+                        -1, &stmt, NULL);
+
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        cerr << "failed to cleanup albums: " << sqlite3_errmsg(sqldb) << endl;
+    }
+    sqlite3_finalize(stmt);
+
+    // remove artists without any album
+    sqlite3_prepare_v2(sqldb,
+                        "DELETE FROM `artists` WHERE ("
+                        "SELECT count(id) FROM `albums` WHERE artistId = artists.id) = 0;",
+                        -1, &stmt, NULL);
+
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        cerr << "failed to cleanup artists: " << sqlite3_errmsg(sqldb) << endl;
+    }
+    sqlite3_finalize(stmt);
+}
+
+void truncate_tables(sqlite3 * sqldb) {
+    sqlite3_stmt *stmt;
+
+    // truncate songs table
+    sqlite3_prepare_v2(sqldb, "DELETE FROM `songs`;", -1, &stmt, NULL);
+
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        cerr << "failed to truncate songs table: " << sqlite3_errmsg(sqldb) << endl;
+    }
+    sqlite3_finalize(stmt);
+
+    // truncate albums table
+    sqlite3_prepare_v2(sqldb, "DELETE FROM `albums`;", -1, &stmt, NULL);
+
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        cerr << "failed to truncate albums table: " << sqlite3_errmsg(sqldb) << endl;
+    }
+    sqlite3_finalize(stmt);
+
+    // truncate artists table
+    sqlite3_prepare_v2(sqldb, "DELETE FROM `artists`;", -1, &stmt, NULL);
+
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        cerr << "failed to truncate artists table: " << sqlite3_errmsg(sqldb) << endl;
+    }
+    sqlite3_finalize(stmt);
+
+}
+
+void usage(char* argv[]) {
+    fprintf(stderr,
+        "Usage: %s action [args...]\n"
+        "  %s scan file.db musicdir                 : scan musicdir for new songs\n"
+        "  %s fullscan file.db musicdir             : delete all records and do a full rescan\n"
+        "  %s useradd file.db username password     : add user\n"
+        "  %s userdel file.db username              : delete user\n",
+        argv[0],argv[0],argv[0],argv[0], argv[0]);
+}
 
 int main(int argc, char* argv[]) {
     sqlite3*    sqldb;
     int         ok;
 
     if (argc < 3) {
-        fprintf(stderr,
-            "Usage: %s action [args...]\n"
-            "  %s scan file.db musicdir/ \n"
-            "  %s useradd file.db username password\n"
-            "  %s userdel file.db username\n",
-            argv[0],argv[0],argv[0],argv[0]);
+        usage(argv);
         return 1;
     }
+
     string action = argv[1];
     string dbpath = argv[2];
 
@@ -351,16 +454,36 @@ int main(int argc, char* argv[]) {
     ok = sqlite3_busy_timeout(sqldb, 5000);
     panic_if(ok != SQLITE_OK, "Could not enable database sharing");
 
+    // make sure the schema exists
+    sqlite3_exec(sqldb, init_sql, NULL, NULL, NULL);
+
     if (action == "scan") {
-        string musicdir = argv[3];
+        string  musicdir    = argv[3];
+        int     added       = 0;
+        cout << "scanning " << musicdir << "..." << endl;
 
-        sqlite3_exec(sqldb, init_sql, NULL, NULL, NULL);
-
-        cout << "scanning " << musicdir << endl;
         // Start scanning and adding stuff to the database
-        scan_fs(sqldb, musicdir);
-    }
-    if (action == "useradd") {
+        added   = scan_fs(sqldb, musicdir);
+        cout << "added " << added << " files" << endl;
+
+        // cleanup orphaned items
+        cout << "cleaning up database..." << endl;
+        cleanup_db(sqldb);
+
+    } else if (action == "fullscan") {
+        string musicdir     = argv[3];
+        int    added        = 0;
+
+        // delete all artists, albums and songs
+        cout << "flushing database..." << endl;
+        truncate_tables(sqldb);
+
+        // do a full rescan
+        cout << "scanning " << musicdir << "..." << endl;
+        added   = scan_fs(sqldb, musicdir);
+        cout << "added " << added << " files" << endl;
+
+    } else if (action == "useradd") {
         string user = argv[3];
         string pass = argv[4];
 
@@ -371,8 +494,24 @@ int main(int argc, char* argv[]) {
         sqlite3_bind_text (stmt, 2, pass.c_str(), -1, NULL);
 
         if (sqlite3_step(stmt) != SQLITE_DONE)
-            cerr << "Error adding user " << sqlite3_errmsg(sqldb) << endl;
+            cerr << "failed to add user: " << sqlite3_errmsg(sqldb) << endl;
         sqlite3_finalize(stmt);
+
+    } else if (action == "userdel") {
+        string user = argv[3];
+
+        sqlite3_stmt *stmt;
+        sqlite3_prepare_v2(sqldb, "DELETE FROM `users` WHERE `username` = ?;", -1, &stmt, NULL);
+
+        sqlite3_bind_text (stmt, 1, user.c_str(), -1, NULL);
+
+        if (sqlite3_step(stmt) != SQLITE_DONE)
+            cerr << "failed to remove user: " << sqlite3_errmsg(sqldb) << endl;
+        sqlite3_finalize(stmt);
+
+    } else {
+        usage(argv);
+        return 1;
     }
 
     // Close and write to disk
