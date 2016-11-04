@@ -173,7 +173,7 @@ func (s *ApiServer) GetArtists(res http.ResponseWriter, req *http.Request) {
 
     sr.Artists, err = s.db.GetIndexedArtists()
     if err != nil {
-        s.logger.Print("failed to build index:", err)
+        s.logger.Print("failed to build indexed artist list:", err)
         s.writeSubsonicResponse(res, req, NewSubsonicError(0, "internal server error"))
     } else {
         s.writeSubsonicResponse(res, req, sr)
@@ -261,9 +261,9 @@ func (s *ApiServer) GetIndexes(res http.ResponseWriter, req *http.Request) {
     var err error
     var sr  = NewSubsonicResponse()
 
-    sr.Indexes, err = s.db.GetIndexedArtists()
+    sr.Indexes, err = s.db.GetIndexes()
     if err != nil {
-        s.logger.Print("failed to build index:", err)
+        s.logger.Print("failed to build indexes:", err)
         s.writeSubsonicResponse(res, req, NewSubsonicError(0, "internal server error"))
     } else {
         s.writeSubsonicResponse(res, req, sr)

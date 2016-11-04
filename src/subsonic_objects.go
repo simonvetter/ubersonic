@@ -15,7 +15,7 @@ type SubsonicResponse struct {
     AlbumList2      *[]*SubsonicAlbum       `xml:"albumList2>album"     json:"album,omitempty"`
     Album           *SubsonicAlbum          `xml:"album"                json:"album,omitempty"`
     Song            *SubsonicSong           `xml:"song"                 json:"song,omitempty"`
-    Indexes         *[]*SubsonicIndex       `xml:"indexes>index"        json:"indexes,omitempty"`
+    Indexes         *SubsonicIndexes        `xml:"indexes"              json:"indexes,omitempty"`
     Artists         *[]*SubsonicIndex       `xml:"artists>index"        json:"artists,omitempty"`
     Artist          *SubsonicArtist         `xml:"artist"               json:"artist,omitempty"`
     MusicDirectory  *SubsonicDirectory      `xml:"directory"            json:"directory,omitempty"`
@@ -77,6 +77,11 @@ type SubsonicArtist struct {
     CoverArt        string                  `xml:"coverArt,attr"        json:"coverArt"`
     AlbumCount      uint64                  `xml:"albumCount,attr"      json:"albumCount"`
     Albums          *[]*SubsonicAlbum       `xml:"album,omitempty"      json:"album,omitempty"`
+}
+
+type SubsonicIndexes struct {
+    LastModified    uint64                  `xml:"lastModified,attr"    json:"lastModified"`
+    Index           *[]*SubsonicIndex       `xml:"index"                json:"index"`
 }
 
 type SubsonicIndex struct {

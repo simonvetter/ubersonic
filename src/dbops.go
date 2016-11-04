@@ -31,13 +31,14 @@ const (
     GETALBUMSONGS   = iota
     GETSONG         = iota
     GETPASSWORD     = iota
+    GETMTIME        = iota
 )
 
 // creates a new SubsonicDB store
 func NewSubsonicDB(dbpath string) (sdb *SubsonicDB) {
     sdb = &SubsonicDB{
         dbpath:         dbpath,
-        statements:     make([]*sql.Stmt, 11),
+        statements:     make([]*sql.Stmt, 12),
     }
 
     return
@@ -143,6 +144,13 @@ func (sdb *SubsonicDB) Open() (err error) {
     }
     sdb.statements[GETPASSWORD] = stmt
 
+    // get mtime
+    stmt, err = db.Prepare(`SELECT mtime FROM last_update_ts WHERE table_name=?`)
+    if err != nil {
+        return
+    }
+    sdb.statements[GETMTIME] = stmt
+
     return
 }
 
@@ -207,6 +215,32 @@ func (sdb *SubsonicDB) GetIndexedArtists() (indexes *[]*SubsonicIndex, err error
     }
 
     indexes = &idx
+    return
+}
+
+// returns a populated SubsonicIndexes object
+func (sdb *SubsonicDB) GetIndexes() (indexes *SubsonicIndexes, err error) {
+    var lastUpdated uint64
+    var idx         *[]*SubsonicIndex;
+
+    // get the last update timestamp
+    err = sdb.statements[GETMTIME].QueryRow("songs").Scan(&lastUpdated)
+    if err != nil {
+        return
+    }
+
+    // get a list of indexes
+    idx, err = sdb.GetIndexedArtists();
+    if err != nil {
+        return
+    }
+
+    // attach the timestamp and the list of indexes to a SubsonicIndexes object
+    indexes = &SubsonicIndexes{
+        LastModified:   lastUpdated,
+        Index:          idx,
+    }
+
     return
 }
 
