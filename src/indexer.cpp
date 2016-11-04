@@ -1,7 +1,6 @@
 /* I borrowed this file from https://github.com/davidgfnet/supersonic-cpp/
  * credits to David G.F.
  */
-
 #include <cstdlib>
 #include <string>
 #include <iostream>
@@ -47,26 +46,31 @@ const char * init_sql = "\
         PRIMARY KEY(id)\
     );\
     CREATE TABLE `songs` (\
-        `id`    INTEGER NOT NULL UNIQUE,\
-        `title`    TEXT,\
-        `albumid`    INTEGER,\
-        `album`    TEXT,\
-        `artistid`    INTEGER,\
+        `id`        INTEGER NOT NULL UNIQUE,\
+        `title`     TEXT,\
+        `albumid`   INTEGER,\
+        `album`     TEXT,\
+        `artistid`  INTEGER,\
         `artist`    TEXT,\
         `trackn`    INTEGER,\
-        `discn`    INTEGER,\
-        `year`    INTEGER,\
-        `duration`    INTEGER,\
-        `bitRate`    INTEGER,\
-        `genre`    TEXT,\
-        `type`    TEXT,\
-        `filename`    TEXT,\
+        `discn`     INTEGER,\
+        `year`      INTEGER,\
+        `duration`  INTEGER,\
+        `bitRate`   INTEGER,\
+        `genre`     TEXT,\
+        `type`      TEXT,\
+        `filename`  TEXT,\
         PRIMARY KEY(id)\
     );\
     CREATE TABLE `users` (\
-        `username`    TEXT NOT NULL UNIQUE,\
-        `password`    TEXT,\
+        `username`  TEXT NOT NULL UNIQUE,\
+        `password`  TEXT,\
         PRIMARY KEY(username)\
+    );\
+    CREATE TABLE `last_update_ts` (\
+        `table_name`    TEXT NOT NULL UNIQUE,\
+        `mtime`         BIGINT,\
+        PRIMARY KEY(table_name)\
     );\
 ";
 
@@ -75,6 +79,8 @@ void panic_if(bool cond, string text) {
         cerr << text << endl;
         exit(1);
     }
+
+    return;
 }
 
 // trim spaces from both ends
@@ -153,6 +159,24 @@ string getFileExtension(const string& fileName)
     }
 }
 
+// updates table mtime
+void update_timestamp(sqlite3 * sqldb, string table_name) {
+    sqlite3_stmt *stmt;
+    sqlite3_prepare_v2(sqldb,
+        "INSERT OR REPLACE INTO `last_update_ts` (`table_name`, `mtime`) "
+        "VALUES (?, strftime('%s000','now'));", -1, &stmt, NULL);
+
+    sqlite3_bind_text(stmt, 1, table_name.c_str(), -1, NULL);
+
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        cerr << "failed to update mtime for " << table_name << ":" << sqlite3_errmsg(sqldb) << endl;
+    }
+
+    sqlite3_finalize(stmt);
+
+    return;
+}
+
 void insert_artist(sqlite3 * sqldb, string artist) {
     sqlite3_stmt *stmt;
     sqlite3_prepare_v2(sqldb, "INSERT OR REPLACE INTO `artists` (`id`, `name`) VALUES (?,?);", -1, &stmt, NULL);
@@ -162,8 +186,14 @@ void insert_artist(sqlite3 * sqldb, string artist) {
 
     if (sqlite3_step(stmt) != SQLITE_DONE) {
         cerr << "failed to insert artist: " << sqlite3_errmsg(sqldb) << endl;
+    } else {
+        if (sqlite3_changes(sqldb) != 0) {
+            update_timestamp(sqldb, "artists");
+        }
     }
     sqlite3_finalize(stmt);
+
+    return;
 }
 
 void insert_album(sqlite3 * sqldb, string album, string artist, string cover) {
@@ -202,8 +232,15 @@ void insert_album(sqlite3 * sqldb, string album, string artist, string cover) {
 
     if (sqlite3_step(stmt) != SQLITE_DONE) {
         cerr << "failed to update album: " << sqlite3_errmsg(sqldb) << endl;
+    } else {
+        if (sqlite3_changes(sqldb) != 0) {
+            update_timestamp(sqldb, "albums");
+        }
     }
+
     sqlite3_finalize(stmt);
+
+    return;
 }
 
 void insert_song(sqlite3 * sqldb, string filename, string title, string artist, string album,
@@ -231,9 +268,15 @@ void insert_song(sqlite3 * sqldb, string filename, string title, string artist, 
 
     if (sqlite3_step(stmt) != SQLITE_DONE) {
         cerr << "failed to insert song: " << sqlite3_errmsg(sqldb) << " ("<< filename << ")" << endl;
+    } else {
+        if (sqlite3_changes(sqldb) != 0) {
+            update_timestamp(sqldb, "songs");
+        }
     }
 
     sqlite3_finalize(stmt);
+
+    return;
 }
 
 bool scan_music_file(sqlite3 * sqldb, string fullpath) {
@@ -306,6 +349,9 @@ bool scan_music_file(sqlite3 * sqldb, string fullpath) {
         discn = tag->properties()["DISCNUMBER"][0].toInt();
     }
 
+    // open a transaction
+    sqlite3_exec(sqldb, "BEGIN TRANSACTION;", NULL, NULL, NULL);
+
     insert_song(sqldb,
                     fullpath,
                     title,
@@ -322,6 +368,9 @@ bool scan_music_file(sqlite3 * sqldb, string fullpath) {
     insert_album(sqldb, album, artist, cover);
 
     insert_artist(sqldb, artist);
+
+    // end transaction
+    sqlite3_exec(sqldb, "COMMIT;", NULL, NULL, NULL);
 
     cout << "added " << fullpath << endl;
 
@@ -350,8 +399,7 @@ int scan_fs(sqlite3 * sqldb, string name) {
             if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
                 continue;
             added_songs += scan_fs(sqldb, fullpath);
-        }
-        else {
+        } else {
             if (scan_music_file(sqldb, fullpath)) {
                 added_songs++;
             }
@@ -386,10 +434,15 @@ void cleanup_db(sqlite3 * sqldb) {
         cerr << "failed to cleanup artists: " << sqlite3_errmsg(sqldb) << endl;
     }
     sqlite3_finalize(stmt);
+
+    return;
 }
 
 void truncate_tables(sqlite3 * sqldb) {
     sqlite3_stmt *stmt;
+
+    // open transaction
+    sqlite3_exec(sqldb, "BEGIN TRANSACTION;", NULL, NULL, NULL);
 
     // truncate songs table
     sqlite3_prepare_v2(sqldb, "DELETE FROM `songs`;", -1, &stmt, NULL);
@@ -398,6 +451,7 @@ void truncate_tables(sqlite3 * sqldb) {
         cerr << "failed to truncate songs table: " << sqlite3_errmsg(sqldb) << endl;
     }
     sqlite3_finalize(stmt);
+    update_timestamp(sqldb, "songs");
 
     // truncate albums table
     sqlite3_prepare_v2(sqldb, "DELETE FROM `albums`;", -1, &stmt, NULL);
@@ -406,6 +460,7 @@ void truncate_tables(sqlite3 * sqldb) {
         cerr << "failed to truncate albums table: " << sqlite3_errmsg(sqldb) << endl;
     }
     sqlite3_finalize(stmt);
+    update_timestamp(sqldb, "albums");
 
     // truncate artists table
     sqlite3_prepare_v2(sqldb, "DELETE FROM `artists`;", -1, &stmt, NULL);
@@ -414,7 +469,12 @@ void truncate_tables(sqlite3 * sqldb) {
         cerr << "failed to truncate artists table: " << sqlite3_errmsg(sqldb) << endl;
     }
     sqlite3_finalize(stmt);
+    update_timestamp(sqldb, "artists");
 
+    // commit transaction
+    sqlite3_exec(sqldb, "COMMIT;", NULL, NULL, NULL);
+
+    return;
 }
 
 void usage(char* argv[]) {
@@ -493,8 +553,10 @@ int main(int argc, char* argv[]) {
         sqlite3_bind_text (stmt, 1, user.c_str(), -1, NULL);
         sqlite3_bind_text (stmt, 2, pass.c_str(), -1, NULL);
 
-        if (sqlite3_step(stmt) != SQLITE_DONE)
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
             cerr << "failed to add user: " << sqlite3_errmsg(sqldb) << endl;
+        }
+
         sqlite3_finalize(stmt);
 
     } else if (action == "userdel") {
@@ -505,8 +567,10 @@ int main(int argc, char* argv[]) {
 
         sqlite3_bind_text (stmt, 1, user.c_str(), -1, NULL);
 
-        if (sqlite3_step(stmt) != SQLITE_DONE)
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
             cerr << "failed to remove user: " << sqlite3_errmsg(sqldb) << endl;
+        }
+
         sqlite3_finalize(stmt);
 
     } else {
