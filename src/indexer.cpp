@@ -281,6 +281,7 @@ void insert_song(sqlite3 * sqldb, string filename, string title, string artist, 
 
 bool scan_music_file(sqlite3 * sqldb, string fullpath) {
     string  artist;
+    string  albumartist;
     string  album;
     string  title;
     string  ext = getFileExtension(fullpath);
@@ -305,11 +306,16 @@ bool scan_music_file(sqlite3 * sqldb, string fullpath) {
         TagLib::ID3v2::Tag *mp3_tag = audioFile.ID3v2Tag(true);
 
         if (mp3_tag) {
-            auto frames = mp3_tag->frameList("APIC");
-            if (!frames.isEmpty()) {
-                auto frame = static_cast<TagLib::ID3v2::AttachedPictureFrame *>(frames.front());
-                cover = string(frame->picture().data(), frame->picture().size());
-                //frame->mimeType()
+            // get album art
+            auto pic_frames = mp3_tag->frameList("APIC");
+            if (!pic_frames.isEmpty()) {
+                auto frame  = static_cast<TagLib::ID3v2::AttachedPictureFrame *>(pic_frames.front());
+                cover       = string(frame->picture().data(), frame->picture().size());
+            }
+            // get album artist
+            auto tpe2_frame = mp3_tag->frameList("TPE2");
+            if (!tpe2_frame.isEmpty()) {
+                albumartist = trim(tpe2_frame.front()->toString().toCString(true));
             }
         }
     }
@@ -323,6 +329,10 @@ bool scan_music_file(sqlite3 * sqldb, string fullpath) {
                 picture.parse(TagLib::ByteVector(cover.c_str(), cover.size()));
                 cover = string(picture.data().data(), picture.data().size());
             }
+            // get album artist
+            if (vorbis_tag->properties().contains("ALBUMARTIST")) {
+                albumartist = vorbis_tag->properties()["ALBUMARTIST"][0].toCString(true);
+            }
         }
     } else if (ext == "flac") {
         auto flac_tag   = dynamic_cast< TagLib::FLAC::File *>(tag);
@@ -332,11 +342,24 @@ bool scan_music_file(sqlite3 * sqldb, string fullpath) {
                 cover = string(picList[0]->data().data(), picList[0]->data().size());
             }
         }
+        auto prop  = tag->properties();
+        if (!prop.isEmpty()) {
+            // get album artist
+            if (prop.contains("ALBUMARTIST")) {
+                albumartist = prop["ALBUMARTIST"][0].toCString(true);
+            }
+        }
     }
 
-    artist  = trim(tag->artist().toCString(true));
+    // if we've found an albumartist tag, use that to index the song
+    if (albumartist.size() != 0) {
+        artist = albumartist;
+    } else {
+        artist  = trim(tag->artist().toCString(true));
+    }
     album   = trim(tag->album().toCString(true));
     title   = trim(tag->title().toCString(true));
+
 
     TagLib::AudioProperties *properties = f.audioProperties();
     if (!properties) {
