@@ -287,7 +287,7 @@ bool scan_music_file(sqlite3 * sqldb, string fullpath) {
     string  ext = getFileExtension(fullpath);
 
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-    if (ext != "mp3" && ext != "ogg" && ext != "flac") {
+    if (ext != "mp3" && ext != "ogg" && ext != "flac" && ext != "m4a") {
         return false;
     }
 
@@ -347,6 +347,22 @@ bool scan_music_file(sqlite3 * sqldb, string fullpath) {
             // get album artist
             if (prop.contains("ALBUMARTIST")) {
                 albumartist = prop["ALBUMARTIST"][0].toCString(true);
+            }
+        }
+    } else if (ext == "m4a") {
+        auto m4a_tag   = dynamic_cast< TagLib::MP4::Tag *>(tag);
+        if (m4a_tag) {
+            auto map = m4a_tag->itemListMap();
+            // get cover art
+            if (map.contains("covr")) {
+                TagLib::MP4::CoverArtList picList = map["covr"].toCoverArtList();
+                if (picList.size() > 0) {
+                    cover = string(picList[0].data().data(), picList[0].data().size());
+                }
+            }
+            // get album artist
+            if (map.contains("aART") && map["aART"].toStringList().size() > 0) {
+                albumartist = map["aART"].toStringList()[0].toCString(true);
             }
         }
     }
