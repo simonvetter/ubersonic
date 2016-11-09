@@ -15,6 +15,8 @@
 #include <dirent.h>
 #include <stdio.h>
 #include <string>
+#include <iostream>
+#include <fstream>
 
 #include <sqlite3.h>
 #include <taglib/fileref.h>
@@ -279,7 +281,7 @@ void insert_song(sqlite3 * sqldb, string filename, string title, string artist, 
     return;
 }
 
-bool scan_music_file(sqlite3 * sqldb, string fullpath) {
+bool scan_music_file(sqlite3 * sqldb, const string fullpath, const string dir_cover) {
     string  artist;
     string  albumartist;
     string  album;
@@ -388,6 +390,12 @@ bool scan_music_file(sqlite3 * sqldb, string fullpath) {
         discn = tag->properties()["DISCNUMBER"][0].toInt();
     }
 
+    // if the file didn't have any cover art tag but the directory scanner found
+    // one, use that to populate the db. Reject files bigger than 400kB.
+    if (cover.size() == 0 && dir_cover.size() > 0 && dir_cover.size() < 400 * 1024) {
+        cover = dir_cover;
+    }
+
     // open a transaction
     sqlite3_exec(sqldb, "BEGIN TRANSACTION;", NULL, NULL, NULL);
 
@@ -419,7 +427,10 @@ bool scan_music_file(sqlite3 * sqldb, string fullpath) {
 int scan_fs(sqlite3 * sqldb, string name) {
     struct dirent   *entry;
     DIR             *dir;
+    struct stat     statbuf;
     int             added_songs = 0;
+    ifstream        coverfile;
+    string          cover_data;
 
     if (!(dir = opendir(name.c_str()))) {
          return 0;
@@ -429,17 +440,30 @@ int scan_fs(sqlite3 * sqldb, string name) {
          return 0;
     }
 
+    // look for {C,c}over.jpg in the current directory and pass its content on to
+    // the file scanner
+    coverfile.open(name + "/cover.jpg", ios::binary);
+    if (!coverfile) {
+        coverfile.open(name + "/Cover.jpg", ios::binary);
+    }
+
+    if (coverfile) {
+        cover_data.assign(  (istreambuf_iterator<char>(coverfile)),
+                            (istreambuf_iterator<char>()));
+        coverfile.close();
+    }
+
     do {
         string fullpath = name + "/" + string(entry->d_name);
-
-        struct stat statbuf;
         stat(fullpath.c_str(), &statbuf);
+
         if (S_ISDIR(statbuf.st_mode)) {
-            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
                 continue;
+            }
             added_songs += scan_fs(sqldb, fullpath);
         } else {
-            if (scan_music_file(sqldb, fullpath)) {
+            if (scan_music_file(sqldb, fullpath, cover_data)) {
                 added_songs++;
             }
         }
