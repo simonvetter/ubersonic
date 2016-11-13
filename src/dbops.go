@@ -57,7 +57,7 @@ func (sdb *SubsonicDB) Open() (err error) {
 
     // prepare sql statements
     // getArtists
-    stmt, err = db.Prepare(`SELECT id, name FROM artists ORDER BY name ASC`)
+    stmt, err = db.Prepare(`SELECT id, name FROM artists ORDER BY name COLLATE NOCASE ASC`)
     if err != nil {
         return
     }
