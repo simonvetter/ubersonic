@@ -124,7 +124,7 @@ func NewSubsonicResponse() (sr *SubsonicResponse) {
     sr = &SubsonicResponse{
             Status: "ok",
             Xmlns: "http://subsonic.org/restapi",
-            Version: "1.5.0",
+            Version: "1.10.0",
     }
 
     return

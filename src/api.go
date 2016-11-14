@@ -7,6 +7,7 @@ import (
     "time"
     "io"
     "os"
+    "encoding/hex"
 )
 
 type ApiServer struct {
@@ -75,6 +76,7 @@ func (s *ApiServer) apiReqHandler(res http.ResponseWriter, req *http.Request) {
 
     // decode request body, if any
 	err = req.ParseForm(); if err != nil {
+        http.Error(res, "internal server error", http.StatusInternalServerError)
         s.logger.Print("failed to parse request:", err)
         return
     }
@@ -89,7 +91,20 @@ func (s *ApiServer) apiReqHandler(res http.ResponseWriter, req *http.Request) {
 
         username    = req.Form["u"][0]
         password    = req.Form["p"][0]
+
+        // the subsonic api allows for hex-encoded passwords with the "enc:" prefix
+        if len(password) > 4 && password[0:4] == "enc:" {
+            var decodedPassword []byte
+            decodedPassword, err = hex.DecodeString(password[4:]); if err != nil {
+                s.writeSubsonicResponse(res, req, NewSubsonicError(40, "wrong username or password"))
+                s.logger.Print("failed to check auth:", err)
+                return
+            }
+            password    = string(decodedPassword)
+        }
+
         ok, err = s.db.CheckPassword(username, password); if err != nil {
+            s.writeSubsonicResponse(res, req, NewSubsonicError(40, "wrong username or password"))
             s.logger.Print("failed to check auth:", err)
             return
         }
