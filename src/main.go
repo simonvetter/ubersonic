@@ -7,7 +7,7 @@ import (
 )
 
 func main() {
-    var logger      *log.Logger = log.New(os.Stdout, "ubersonic: ", log.LstdFlags)
+    var logger      *log.Logger = log.New(os.Stdout, "", log.LstdFlags)
     var sdb         *SubsonicDB
     var err         error
     var server      *ApiServer

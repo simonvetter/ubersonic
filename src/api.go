@@ -181,7 +181,7 @@ func (s *ApiServer) Ping(res http.ResponseWriter, req *http.Request) {
     return
 }
 
-// handle getArtists.view requests
+// handles getArtists.view requests
 func (s *ApiServer) GetArtists(res http.ResponseWriter, req *http.Request) {
     var err error
     var sr  = NewSubsonicResponse()
@@ -197,7 +197,7 @@ func (s *ApiServer) GetArtists(res http.ResponseWriter, req *http.Request) {
     return
 }
 
-// handle getArtist.view requests
+// handles getArtist.view requests
 func (s *ApiServer) GetArtist(res http.ResponseWriter, req *http.Request) {
     var err error
     var id  string

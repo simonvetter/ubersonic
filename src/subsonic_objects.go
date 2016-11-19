@@ -76,7 +76,7 @@ type SubsonicArtist struct {
     Name            string                  `xml:"name,attr"            json:"name"`
     CoverArt        string                  `xml:"coverArt,attr"        json:"coverArt"`
     AlbumCount      uint64                  `xml:"albumCount,attr"      json:"albumCount"`
-    Albums          *[]*SubsonicAlbum       `xml:"album,omitempty"      json:"album,omitempty"`
+    Albums          []*SubsonicAlbum        `xml:"album,omitempty"      json:"album,omitempty"`
 }
 
 type SubsonicIndexes struct {

@@ -70,7 +70,7 @@ func (sdb *SubsonicDB) Open() (err error) {
     sdb.statements[GETARTIST] = stmt
 
     // get artist albums
-    stmt, err = db.Prepare(`SELECT id, title, artistid, artist, cover FROM albums
+    stmt, err = db.Prepare(`SELECT id, title, artistid, artist FROM albums
                             WHERE artistid=?`)
     if err != nil {
         return
@@ -78,13 +78,12 @@ func (sdb *SubsonicDB) Open() (err error) {
     sdb.statements[GETARTISTALBUMS] = stmt
 
     // get album 
-    stmt, err = db.Prepare(`SELECT id, title, artistid, artist, cover FROM albums
+    stmt, err = db.Prepare(`SELECT id, title, artistid, artist FROM albums
                             WHERE id=?`)
     if err != nil {
         return
     }
     sdb.statements[GETALBUM] = stmt
-
 
     // get album count for artist
     stmt, err = db.Prepare(`SELECT count(id) FROM albums WHERE artistid=?`)
@@ -155,10 +154,10 @@ func (sdb *SubsonicDB) Open() (err error) {
 }
 
 // returns a list of indexed artists with per-artist album count
-func (sdb *SubsonicDB) GetIndexedArtists() (indexes *[]*SubsonicIndex, err error) {
-    var si              *SubsonicIndex
-    var rows            *sql.Rows
-    var idx             = make([]*SubsonicIndex, 0)
+func (sdb *SubsonicDB) GetIndexedArtists() (indexesptr *[]*SubsonicIndex, err error) {
+    var si      *SubsonicIndex
+    var rows    *sql.Rows
+    var indexes = make([]*SubsonicIndex, 0)
 
     // run the prepared get artist statement
     rows, err = sdb.statements[GETARTISTS].Query(); if err != nil {
@@ -196,7 +195,7 @@ func (sdb *SubsonicDB) GetIndexedArtists() (indexes *[]*SubsonicIndex, err error
         // if not, add the old one to the list and create a new one
         if si == nil || strings.ToUpper(name)[0] != si.Name[0] {
             if si != nil {
-                idx = append(idx, si)
+                indexes = append(indexes, si)
             }
 
             si = &SubsonicIndex{
@@ -211,10 +210,10 @@ func (sdb *SubsonicDB) GetIndexedArtists() (indexes *[]*SubsonicIndex, err error
 
     // add the last index we were working on to the list, if any
     if si != nil {
-        idx = append(idx, si)
+        indexes = append(indexes, si)
     }
 
-    indexes = &idx
+    indexesptr  = &indexes
     return
 }
 
@@ -306,31 +305,10 @@ func (sdb *SubsonicDB) GetArtist(id string) (sr *SubsonicArtist, err error) {
 
     // iterate through each album
     for rows.Next() {
-        var sa          *SubsonicAlbum
-        var id          uint64
-        var title       string
-        var artistid    uint64
-        var artist      string
-        var cover       []byte
-        var songCount   uint64
+        var sa  *SubsonicAlbum
 
-        err = rows.Scan(&id, &title, &artistid, &artist, &cover); if err != nil {
+        sa, err  = sdb.scanAlbum(rows); if err != nil {
             return
-        }
-
-        // count the number of songs in that album
-        err = sdb.statements[GETSONGCNT].QueryRow(sr.Id, id).Scan(&songCount)
-        if err != nil {
-            return
-        }
-
-        sa = &SubsonicAlbum{
-            Id:         id,
-            Name:       title,
-            ArtistId:   sr.Id,
-            ArtistName: sr.Name,
-            SongCount:  songCount,
-            CoverArt:   fmt.Sprintf("al-%v", id),
         }
 
         albums = append(albums, sa)
@@ -339,7 +317,7 @@ func (sdb *SubsonicDB) GetArtist(id string) (sr *SubsonicArtist, err error) {
         sr.AlbumCount++
     }
 
-    sr.Albums   = &albums
+    sr.Albums   = albums
 
     return
 }
@@ -347,7 +325,6 @@ func (sdb *SubsonicDB) GetArtist(id string) (sr *SubsonicArtist, err error) {
 // returns a list of all songs for a given album id
 func (sdb *SubsonicDB) GetAlbum(id string) (sr *SubsonicAlbum, err error) {
     var rows    *sql.Rows
-    var cover   []byte
     var songs   = make([]*SubsonicSong, 0)
 
     sr  = &SubsonicAlbum{
@@ -356,16 +333,13 @@ func (sdb *SubsonicDB) GetAlbum(id string) (sr *SubsonicAlbum, err error) {
 
     // fetch the album first
     err = sdb.statements[GETALBUM].QueryRow(id).Scan(
-            &sr.Id, &sr.Name, &sr.ArtistId, &sr.ArtistName, &cover)
+            &sr.Id, &sr.Name, &sr.ArtistId, &sr.ArtistName)
     if err != nil {
         if err == sql.ErrNoRows {
             err = ErrItemNotFound
         }
         return
     }
-
-    // unused
-    _ = cover
 
     // fetch all songs for this album
     rows, err = sdb.statements[GETALBUMSONGS].Query(sr.ArtistId, sr.Id); if err != nil {
@@ -386,38 +360,6 @@ func (sdb *SubsonicDB) GetAlbum(id string) (sr *SubsonicAlbum, err error) {
     }
 
     sr.Songs    = &songs
-    return
-}
-
-func scanSong(row *sql.Rows) (s *SubsonicSong, err error) {
-    var year        uint64
-    var discn       uint64
-    var filepath    string
-    var filesuffix  string
-    s               = &SubsonicSong{}
-
-    err = row.Scan(
-            &s.Id, &s.Title, &s.AlbumId, &s.Album, &s.ArtistId, &s.Artist,
-            &s.TrackNo, &discn, &year, &s.Duration, &s.BitRate, &s.Genre, &s.Type,
-            &filepath); if err != nil {
-        return
-    }
-    // unused
-    _   = discn
-
-    filesuffix  = strings.ToLower(path.Ext(filepath))
-    if filesuffix != "" {
-        // get rid of trailing slash
-        s.Suffix        = filesuffix[1:]
-        // get mime type
-        s.ContentType   = mime.TypeByExtension(filesuffix)
-    }
-
-    s.Parent    = s.AlbumId
-    s.CoverArt  = fmt.Sprintf("al-%v", s.AlbumId)
-    s.Created   = fmt.Sprintf("%04d-01-01T00:00:00", year)
-    s.Path      = filepath
-
     return
 }
 
@@ -460,6 +402,67 @@ func (sdb *SubsonicDB) CheckPassword(username string, password string) (ok bool,
     // found exactly one match for user,pass in the databse, return ok
     if count == 1 {
         ok = true
+    }
+
+    return
+}
+
+func scanSong(row *sql.Rows) (s *SubsonicSong, err error) {
+    var year        uint64
+    var discn       uint64
+    var filepath    string
+    var filesuffix  string
+    s               = &SubsonicSong{}
+
+    err = row.Scan(
+            &s.Id, &s.Title, &s.AlbumId, &s.Album, &s.ArtistId, &s.Artist,
+            &s.TrackNo, &discn, &year, &s.Duration, &s.BitRate, &s.Genre, &s.Type,
+            &filepath); if err != nil {
+        return
+    }
+    // unused
+    _   = discn
+
+    filesuffix  = strings.ToLower(path.Ext(filepath))
+    if filesuffix != "" {
+        // get rid of trailing slash
+        s.Suffix        = filesuffix[1:]
+        // get mime type
+        s.ContentType   = mime.TypeByExtension(filesuffix)
+    }
+
+    s.Parent    = s.AlbumId
+    s.CoverArt  = fmt.Sprintf("al-%v", s.AlbumId)
+    s.Created   = fmt.Sprintf("%04d-01-01T00:00:00", year)
+    s.Path      = filepath
+
+    return
+}
+
+func (sdb *SubsonicDB) scanAlbum(row *sql.Rows) (sa *SubsonicAlbum, err error) {
+    var id          uint64
+    var title       string
+    var artistid    uint64
+    var artist      string
+    var songCount   uint64
+
+    err = row.Scan(&id, &title, &artistid, &artist); if err != nil {
+        return
+    }
+
+    // count the number of songs in that album
+    err = sdb.statements[GETSONGCNT].QueryRow(artistid, id).Scan(&songCount)
+    if err != nil {
+        return
+    }
+
+    sa = &SubsonicAlbum{
+        Id:         id,
+        Name:       title,
+        ArtistId:   artistid,
+        ArtistName: artist,
+        SongCount:  songCount,
+        CoverArt:   fmt.Sprintf("al-%v", id),
     }
 
     return
