@@ -34,18 +34,23 @@
 using namespace std;
 
 const char * init_sql = "\
-    CREATE TABLE `albums` (\
-        `id`    INTEGER NOT NULL UNIQUE,\
-        `title`    TEXT,\
-        `artistid`    INTEGER,\
-        `artist`    TEXT,\
-        `cover`    BLOB,\
+    CREATE TABLE `artists` (\
+        `id`        INTEGER NOT NULL UNIQUE,\
+        `name`      TEXT,\
         PRIMARY KEY(id)\
     );\
-    CREATE TABLE `artists` (\
-        `id`    INTEGER NOT NULL UNIQUE,\
-        `name`    TEXT,\
+    CREATE TABLE `albums` (\
+        `id`        INTEGER NOT NULL UNIQUE,\
+        `title`     TEXT,\
+        `artistid`  INTEGER,\
+        `artist`    TEXT,\
         PRIMARY KEY(id)\
+    );\
+    CREATE TABLE `covers` (\
+        `albumId`   INTEGER NOT NULL UNIQUE,\
+        `artistId`  INTEGER,\
+        `image`     BLOB,\
+        PRIMARY KEY(albumId)\
     );\
     CREATE TABLE `songs` (\
         `id`        INTEGER NOT NULL UNIQUE,\
@@ -200,7 +205,8 @@ void insert_artist(sqlite3 * sqldb, string artist) {
 
 void insert_album(sqlite3 * sqldb, string album, string artist, string cover) {
     sqlite3_stmt    *stmt;
-    uint64_t        albumId = calcId(album + "@" + artist);
+    uint64_t        albumId     = calcId(album + "@" + artist);
+    uint64_t        artistId    = calcId(artist);
 
     // make sure the record exists so we can update later
     sqlite3_prepare_v2(sqldb, "INSERT OR IGNORE INTO `albums` (`id`) VALUES (?);", -1, &stmt, NULL);
@@ -211,26 +217,14 @@ void insert_album(sqlite3 * sqldb, string album, string artist, string cover) {
     }
     sqlite3_finalize(stmt);
 
-    // don't attempt to update the cover art if the current file doesn't have it
-    if (cover.size() != 0) {
-        sqlite3_prepare_v2(sqldb,
-                        "UPDATE `albums` SET `title`=?, `artistid`=?, `artist`=?, `cover`=?"
-                        "WHERE id=?;", -1, &stmt, NULL);
-    } else {
-        sqlite3_prepare_v2(sqldb,
-                        "UPDATE `albums` SET `title`=?, `artistid`=?, `artist`=?"
-                        "WHERE id=?;", -1, &stmt, NULL);
-    }
+    sqlite3_prepare_v2(sqldb,
+                   "UPDATE `albums` SET `title`=?, `artistid`=?, `artist`=?"
+                   "WHERE id=?;", -1, &stmt, NULL);
 
     sqlite3_bind_text (stmt, 1, album.c_str(), -1, NULL);
-    sqlite3_bind_int64(stmt, 2, calcId(artist));
+    sqlite3_bind_int64(stmt, 2, artistId);
     sqlite3_bind_text (stmt, 3, artist.c_str(), -1, NULL);
-    if (cover.size() != 0) {
-        sqlite3_bind_blob (stmt, 4, cover.data(), cover.size(), NULL);
-        sqlite3_bind_int64(stmt, 5, albumId);
-    } else {
-        sqlite3_bind_int64(stmt, 4, albumId);
-    }
+    sqlite3_bind_int64(stmt, 4, albumId);
 
     if (sqlite3_step(stmt) != SQLITE_DONE) {
         cerr << "failed to update album: " << sqlite3_errmsg(sqldb) << endl;
@@ -241,6 +235,22 @@ void insert_album(sqlite3 * sqldb, string album, string artist, string cover) {
     }
 
     sqlite3_finalize(stmt);
+
+    if (cover.size() > 0) {
+        sqlite3_prepare_v2(sqldb,
+                    "INSERT OR IGNORE INTO `covers` (`albumId`, `artistId`, "
+                    "`image`) VALUES (?,?,?);", -1, &stmt, NULL);
+
+        sqlite3_bind_int64(stmt, 1, albumId);
+        sqlite3_bind_int64(stmt, 2, artistId);
+        sqlite3_bind_blob (stmt, 3, cover.data(), cover.size(), NULL);
+
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            cerr << "failed to insert cover: " << sqlite3_errmsg(sqldb) << endl;
+        }
+
+        sqlite3_finalize(stmt);
+    }
 
     return;
 }
@@ -440,11 +450,17 @@ int scan_fs(sqlite3 * sqldb, string name) {
          return 0;
     }
 
-    // look for {C,c}over.jpg in the current directory and pass its content on to
+    // look for {C,c}over.{jpg,png} in the current directory and pass its content on to
     // the file scanner
     coverfile.open(name + "/cover.jpg", ios::binary);
     if (!coverfile) {
+        coverfile.open(name + "/cover.png", ios::binary);
+    }
+    if (!coverfile) {
         coverfile.open(name + "/Cover.jpg", ios::binary);
+    }
+    if (!coverfile) {
+        coverfile.open(name + "/Cover.png", ios::binary);
     }
 
     if (coverfile) {
@@ -498,6 +514,17 @@ void cleanup_db(sqlite3 * sqldb) {
     }
     sqlite3_finalize(stmt);
 
+    // remove orphaned album art
+    sqlite3_prepare_v2(sqldb,
+                        "DELETE FROM `covers` WHERE ("
+                        "SELECT count(id) FROM `albums` WHERE albumId = covers.albumId) = 0;",
+                        -1, &stmt, NULL);
+
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        cerr << "failed to cleanup covers: " << sqlite3_errmsg(sqldb) << endl;
+    }
+    sqlite3_finalize(stmt);
+
     return;
 }
 
@@ -523,6 +550,15 @@ void truncate_tables(sqlite3 * sqldb) {
         cerr << "failed to truncate albums table: " << sqlite3_errmsg(sqldb) << endl;
     }
     sqlite3_finalize(stmt);
+
+    // truncate covers table
+    sqlite3_prepare_v2(sqldb, "DELETE FROM `covers`;", -1, &stmt, NULL);
+
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        cerr << "failed to truncate covers table: " << sqlite3_errmsg(sqldb) << endl;
+    }
+    sqlite3_finalize(stmt);
+
     update_timestamp(sqldb, "albums");
 
     // truncate artists table

@@ -101,16 +101,16 @@ func (sdb *SubsonicDB) Open() (err error) {
     sdb.statements[GETSONGCNT] = stmt
 
     // get album art for artist
-    stmt, err = db.Prepare(`SELECT cover FROM albums WHERE artistid=?
-                            AND cover NOT NULL`)
+    stmt, err = db.Prepare(`SELECT image FROM covers WHERE artistId=?
+                            AND image NOT NULL`)
     if err != nil {
         return
     }
     sdb.statements[GETARTISTART] = stmt
 
     // get album art
-    stmt, err = db.Prepare(`SELECT cover FROM albums WHERE id=?
-                             AND cover NOT NULL`)
+    stmt, err = db.Prepare(`SELECT image FROM covers WHERE albumId=?
+                             AND image NOT NULL`)
     if err != nil {
         return
     }
@@ -243,7 +243,7 @@ func (sdb *SubsonicDB) GetIndexes() (indexes *SubsonicIndexes, err error) {
     return
 }
 
-// returns a covert art image for the specified artist, album or song
+// returns a cover art image for the specified artist, album or song
 func (sdb *SubsonicDB) GetCoverArt(id string) (coverArt []byte, err error) {
     var rows    *sql.Rows
 
