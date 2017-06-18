@@ -46,12 +46,14 @@ const char * init_sql = "\
         `artist`    TEXT,\
         PRIMARY KEY(id)\
     );\
+    CREATE INDEX `index_albums_artistid` ON `albums`(`artistid`); \
     CREATE TABLE `covers` (\
         `albumId`   INTEGER NOT NULL UNIQUE,\
         `artistId`  INTEGER,\
         `image`     BLOB,\
         PRIMARY KEY(albumId)\
     );\
+    CREATE INDEX `index_covers_artistid` ON `covers`(`artistId`); \
     CREATE TABLE `songs` (\
         `id`        INTEGER NOT NULL UNIQUE,\
         `title`     TEXT,\
@@ -69,6 +71,7 @@ const char * init_sql = "\
         `filename`  TEXT,\
         PRIMARY KEY(id)\
     );\
+    CREATE INDEX `index_songs_artistid_albumid` ON `songs`(`artistid`, `albumid`); \
     CREATE TABLE `users` (\
         `username`  TEXT NOT NULL UNIQUE,\
         `password`  TEXT,\
